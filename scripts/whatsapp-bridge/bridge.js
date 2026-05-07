@@ -28,6 +28,8 @@ import { randomBytes } from 'crypto';
 import { execSync } from 'child_process';
 import { tmpdir } from 'os';
 import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
+import { ProxyAgent } from 'proxy-agent';
 import { matchesAllowedUser, parseAllowedUsers } from './allowlist.js';
 
 // Parse CLI args
@@ -45,6 +47,8 @@ const WHATSAPP_DEBUG =
 
 const PORT = parseInt(getArg('port', '3000'), 10);
 const SESSION_DIR = getArg('session', path.join(process.env.HOME || '~', '.hermes', 'whatsapp', 'session'));
+const WHATSAPP_PROXY_URL = process.env.WHATSAPP_PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy || '';
+const WHATSAPP_PROXY_AGENT = WHATSAPP_PROXY_URL ? new ProxyAgent(WHATSAPP_PROXY_URL) : undefined;
 const IMAGE_CACHE_DIR = path.join(process.env.HOME || '~', '.hermes', 'image_cache');
 const DOCUMENT_CACHE_DIR = path.join(process.env.HOME || '~', '.hermes', 'document_cache');
 const AUDIO_CACHE_DIR = path.join(process.env.HOME || '~', '.hermes', 'audio_cache');
@@ -162,12 +166,17 @@ let connectionState = 'disconnected';
 
 async function startSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  const { version } = await fetchLatestBaileysVersion(WHATSAPP_PROXY_AGENT ? { agent: WHATSAPP_PROXY_AGENT } : {});
+
+  if (WHATSAPP_PROXY_AGENT) {
+    console.log(`[bridge] Using WhatsApp proxy: ${WHATSAPP_PROXY_URL.replace(/:\/\/.*@/, '://[redacted]@')}`);
+  }
 
   sock = makeWASocket({
     version,
     auth: state,
     logger,
+    agent: WHATSAPP_PROXY_AGENT,
     printQRInTerminal: false,
     browser: ['Hermes Agent', 'Chrome', '120.0'],
     syncFullHistory: false,
@@ -188,8 +197,21 @@ async function startSocket() {
 
     if (qr) {
       console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
-      qrcode.generate(qr, { small: true });
+      // Force terminal QR output for `hermes gateway setup` so the operator can scan immediately.
+      // Keep this synchronous-looking log path fast; PNG writing is best-effort below.
+      qrcode.generate(qr, { small: true }, (terminalQr) => {
+        console.log(terminalQr);
+      });
       console.log('\nWaiting for scan...\n');
+      try {
+        writeFileSync('/tmp/hermes-whatsapp-qr-latest.txt', qr);
+        QRCode.toFile('/tmp/hermes-whatsapp-qr-latest.png', qr, { type: 'png', margin: 4, width: 900 }, (err) => {
+          if (err) console.error('[bridge] Failed to write QR PNG:', err.message);
+          else console.log('QR_PNG:/tmp/hermes-whatsapp-qr-latest.png');
+        });
+      } catch (e) {
+        console.error('[bridge] Failed to persist QR:', e.message);
+      }
     }
 
     if (connection === 'close') {

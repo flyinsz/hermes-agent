@@ -523,6 +523,16 @@ class WhatsAppAdapter(BasePlatformAdapter):
             # Pass WHATSAPP_REPLY_PREFIX from config.yaml so the Node bridge
             # can use it without the user needing to set a separate env var.
             bridge_env = os.environ.copy()
+            # Keep Hermes/Python gateway free of generic proxy variables, but
+            # give the WhatsApp Node bridge the same proxy surface as the old
+            # Hermes-wide experiment. Some Baileys/ws dependency paths only
+            # look at HTTP(S)_PROXY/ALL_PROXY rather than WHATSAPP_PROXY_URL.
+            whatsapp_proxy_url = bridge_env.get("WHATSAPP_PROXY_URL")
+            if whatsapp_proxy_url:
+                for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+                    bridge_env[key] = whatsapp_proxy_url
+                bridge_env.setdefault("NO_PROXY", "127.0.0.1,localhost,::1")
+                bridge_env.setdefault("no_proxy", "127.0.0.1,localhost,::1")
             if self._reply_prefix is not None:
                 bridge_env["WHATSAPP_REPLY_PREFIX"] = self._reply_prefix
 
